@@ -10,24 +10,31 @@ from datetime import datetime
 # Download file from URL
 # ------------------------------
 def download_file(url, folder, file_name):
+    """Downloads a file from a URL into a folder, returns True if successful."""
+    if pd.isna(url) or url.strip() == "":
+        st.info(f"Skipped {file_name} (empty URL)")
+        return False
     try:
-        response = requests.get(url, stream=True)
+        response = requests.get(url, stream=True, timeout=10)
         if response.status_code == 200:
-            with open(os.path.join(folder, file_name), "wb") as f:
+            file_path = os.path.join(folder, file_name)
+            with open(file_path, "wb") as f:
                 for chunk in response.iter_content(1024):
                     f.write(chunk)
+            st.success(f"Downloaded: {file_name}")
+            return True
         else:
-            print(f"Failed to download: {url}")
+            st.warning(f"Failed to download {file_name} - Status {response.status_code}")
+            return False
     except Exception as e:
-        print(f"Error downloading {url}: {e}")
+        st.warning(f"Error downloading {file_name}: {e}")
+        return False
 
 # ------------------------------
 # STREAMLIT UI
 # ------------------------------
 st.set_page_config(page_title="Finance File Downloader", page_icon="📁")
-
 st.title("📁 Finance File Downloader Dashboard (CSV → Files → ZIP)")
-
 st.write("""
 Upload a CSV file containing columns like:
 - RESTAURANT_ID  
@@ -38,7 +45,7 @@ Upload a CSV file containing columns like:
 
 The system will:
 1. Download all URLs  
-2. Arrange into folders  
+2. Arrange into folders by Restaurant ID & Year  
 3. Create a ZIP file (splits into parts if >23 MB)  
 4. Allow you to download it  
 """)
@@ -84,19 +91,14 @@ if st.button("Start Processing"):
 
         date_str = dt.strftime("%Y_%m_%d")
 
-        if pd.notna(invoice_url):
-            download_file(invoice_url, inv_folder, f"Invoice_{date_str}.pdf")
-
-        if pd.notna(pa_url):
-            download_file(pa_url, pa_folder, f"Payment_Advice_{date_str}.pdf")
-
-        if pd.notna(ann_url):
-            download_file(ann_url, ann_folder, f"Annexure_{date_str}.xlsx")
+        download_file(invoice_url, inv_folder, f"Invoice_{date_str}.pdf")
+        download_file(pa_url, pa_folder, f"Payment_Advice_{date_str}.pdf")
+        download_file(ann_url, ann_folder, f"Annexure_{date_str}.xlsx")
 
         progress.progress((idx + 1) / total)
 
     # ------------------------------
-    # Create ZIP (split if >23 MB)
+    # Create ZIP and split if >23 MB
     # ------------------------------
     MAX_SIZE_MB = 23
     MAX_SIZE = MAX_SIZE_MB * 1024 * 1024  # bytes
@@ -106,14 +108,15 @@ if st.button("Start Processing"):
         for root, dirs, files in os.walk(temp_dir):
             for file in files:
                 file_path = os.path.join(root, file)
-                if os.path.isfile(file_path):
+                if os.path.isfile(file_path) and os.path.getsize(file_path) > 0:
                     zipf.write(file_path, arcname=os.path.relpath(file_path, temp_dir))
 
     zip_size = os.path.getsize(zip_path)
-
     st.success("Processing Completed!")
 
-    if zip_size <= MAX_SIZE:
+    if zip_size == 0:
+        st.error("No files were downloaded. Please check your CSV URLs.")
+    elif zip_size <= MAX_SIZE:
         # Single ZIP
         with open(zip_path, "rb") as f:
             st.download_button("Download ZIP File", f, file_name="finance_output.zip")

@@ -7,36 +7,49 @@ import tempfile
 from datetime import datetime
 
 # ------------------------------
-# Download file from URL
+# Access secrets
 # ------------------------------
-def download_file(url, folder, file_name):
-    """
-    Downloads a file from an internal URL into the specified folder.
-    Works only inside the internal network where URLs are accessible.
-    """
+EMAIL = st.secrets["finance"]["email"]
+PASSWORD = st.secrets["finance"]["password"]
+
+# ------------------------------
+# Download file with authentication
+# ------------------------------
+def download_file_authenticated(url, folder, file_name):
     try:
-        response = requests.get(url, stream=True)
-        if response.status_code == 200:
-            file_path = os.path.join(folder, file_name)
-            with open(file_path, "wb") as f:
-                for chunk in response.iter_content(1024):
-                    f.write(chunk)
-            return True
-        else:
-            st.warning(f"Failed to download {file_name} - Status {response.status_code}")
-            return False
+        with requests.Session() as session:
+            # Replace with your internal login endpoint if required
+            login_url = "https://internal.swiggy.in/login"  
+            payload = {"email": EMAIL, "password": PASSWORD}
+
+            login_resp = session.post(login_url, data=payload)
+            if login_resp.status_code != 200:
+                st.error(f"Login failed with status: {login_resp.status_code}")
+                return False
+
+            response = session.get(url, stream=True)
+            if response.status_code == 200:
+                with open(os.path.join(folder, file_name), "wb") as f:
+                    for chunk in response.iter_content(1024):
+                        f.write(chunk)
+                return True
+            else:
+                st.warning(f"Failed to download {file_name} - Status {response.status_code}")
+                return False
+
     except Exception as e:
-        st.warning(f"Error downloading {file_name}: {e}")
+        st.error(f"Error downloading {file_name}: {e}")
         return False
 
 # ------------------------------
-# STREAMLIT UI
+# Streamlit UI
 # ------------------------------
 st.set_page_config(page_title="Finance File Downloader", page_icon="📁")
-st.title("📁 Finance File Downloader Dashboard (Internal Use)")
+
+st.title("📁 Finance File Downloader Dashboard (CSV → Files → ZIP)")
 
 st.write("""
-Upload a CSV file with these columns:
+Upload a CSV file containing columns like:
 - RESTAURANT_ID  
 - INVOICE_URL  
 - PAYMENT_ADVICE_URL  
@@ -44,13 +57,13 @@ Upload a CSV file with these columns:
 - DT  
 
 The system will:
-1. Download all files from internal URLs  
-2. Organize by Restaurant ID → Year → File Type  
-3. Create ZIP file(s) (splits if >23 MB)  
-4. Allow download directly from the dashboard  
+1. Download all URLs (requires internal access)
+2. Arrange into folders
+3. Create a ZIP file (splits into parts if >23 MB)
+4. Allow you to download it
 """)
 
-uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
+uploaded_file = st.file_uploader("Upload the CSV file", type=["csv"])
 
 if st.button("Start Processing"):
 
@@ -58,52 +71,57 @@ if st.button("Start Processing"):
         st.error("Please upload a CSV file.")
         st.stop()
 
-    # Read CSV and normalize headers
+    # Read CSV and convert headers to lowercase
     df = pd.read_csv(uploaded_file)
     df.columns = df.columns.str.lower()
 
     required_cols = ["restaurant_id", "invoice_url", "payment_advice_url", "annexure_url", "dt"]
     for col in required_cols:
         if col not in df.columns:
-            st.error(f"CSV missing required column: {col}")
+            st.error(f"CSV is missing required column: {col} (case-insensitive)")
             st.stop()
 
     temp_dir = tempfile.mkdtemp()
     progress = st.progress(0)
     total = len(df)
 
+    # ------------------------------
+    # Process each row
+    # ------------------------------
     for idx, row in df.iterrows():
         rid = str(row["restaurant_id"])
+        invoice_url = row["invoice_url"]
+        pa_url = row["payment_advice_url"]
+        ann_url = row["annexure_url"]
         dt = pd.to_datetime(row["dt"])
-        date_str = dt.strftime("%Y_%m_%d")
 
-        # Create folder structure
-        rid_folder = os.path.join(temp_dir, f"RID_{rid}", str(dt.year))
-        folders = {
-            "Invoices": os.path.join(rid_folder, "Invoices"),
-            "Payment_Advices": os.path.join(rid_folder, "Payment_Advices"),
-            "Annexures": os.path.join(rid_folder, "Annexures")
-        }
-        for f in folders.values():
+        rid_folder = os.path.join(temp_dir, f"RID_{rid}")
+        year_folder = os.path.join(rid_folder, str(dt.year))
+        inv_folder = os.path.join(year_folder, "Invoices")
+        pa_folder = os.path.join(year_folder, "Payment_Advices")
+        ann_folder = os.path.join(year_folder, "Annexures")
+
+        for f in [inv_folder, pa_folder, ann_folder]:
             os.makedirs(f, exist_ok=True)
 
-        # Download files
-        if pd.notna(row["invoice_url"]):
-            download_file(row["invoice_url"], folders["Invoices"], f"Invoice_{date_str}.pdf")
-        if pd.notna(row["payment_advice_url"]):
-            download_file(row["payment_advice_url"], folders["Payment_Advices"], f"Payment_Advice_{date_str}.pdf")
-        if pd.notna(row["annexure_url"]):
-            download_file(row["annexure_url"], folders["Annexures"], f"Annexure_{date_str}.xlsx")
+        date_str = dt.strftime("%Y_%m_%d")
+
+        if pd.notna(invoice_url):
+            download_file_authenticated(invoice_url, inv_folder, f"Invoice_{date_str}.pdf")
+        if pd.notna(pa_url):
+            download_file_authenticated(pa_url, pa_folder, f"Payment_Advice_{date_str}.pdf")
+        if pd.notna(ann_url):
+            download_file_authenticated(ann_url, ann_folder, f"Annexure_{date_str}.xlsx")
 
         progress.progress((idx + 1) / total)
 
     # ------------------------------
-    # Create ZIP(s)
+    # Create ZIP and split if >23 MB
     # ------------------------------
     MAX_SIZE_MB = 23
     MAX_SIZE = MAX_SIZE_MB * 1024 * 1024  # bytes
-    zip_path = os.path.join(temp_dir, "output.zip")
 
+    zip_path = os.path.join(temp_dir, "output.zip")
     with zipfile.ZipFile(zip_path, "w") as zipf:
         for root, dirs, files in os.walk(temp_dir):
             for file in files:
@@ -116,10 +134,12 @@ if st.button("Start Processing"):
     st.success("Processing Completed!")
 
     if zip_size <= MAX_SIZE:
+        # Single ZIP
         with open(zip_path, "rb") as f:
             st.download_button("Download ZIP File", f, file_name="finance_output.zip")
     else:
-        st.info(f"ZIP size is {zip_size / (1024*1024):.2f} MB. Splitting into multiple parts...")
+        # Split into multiple parts
+        st.info(f"The total ZIP size is {zip_size / (1024*1024):.2f} MB. Splitting into multiple parts...")
         part_num = 1
         with open(zip_path, "rb") as f:
             while True:

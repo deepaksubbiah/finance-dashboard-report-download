@@ -39,10 +39,9 @@ Upload a CSV file containing columns like:
 The system will:
 1. Download all URLs  
 2. Arrange into folders  
-3. Create a ZIP file  
+3. Create a ZIP file (splits into parts if >23 MB)  
 4. Allow you to download it  
 """)
-
 
 uploaded_file = st.file_uploader("Upload the CSV file", type=["csv"])
 
@@ -63,7 +62,6 @@ if st.button("Start Processing"):
             st.stop()
 
     temp_dir = tempfile.mkdtemp()
-
     progress = st.progress(0)
     total = len(df)
 
@@ -97,16 +95,40 @@ if st.button("Start Processing"):
 
         progress.progress((idx + 1) / total)
 
+    # ------------------------------
+    # Create ZIP (split if >23 MB)
+    # ------------------------------
+    MAX_SIZE_MB = 23
+    MAX_SIZE = MAX_SIZE_MB * 1024 * 1024  # bytes
+
     zip_path = os.path.join(temp_dir, "output.zip")
     with zipfile.ZipFile(zip_path, "w") as zipf:
         for root, dirs, files in os.walk(temp_dir):
             for file in files:
-                zipf.write(
-                    os.path.join(root, file),
-                    arcname=os.path.relpath(os.path.join(root, file), temp_dir)
-                )
+                file_path = os.path.join(root, file)
+                if os.path.isfile(file_path):
+                    zipf.write(file_path, arcname=os.path.relpath(file_path, temp_dir))
+
+    zip_size = os.path.getsize(zip_path)
 
     st.success("Processing Completed!")
 
-    with open(zip_path, "rb") as f:
-        st.download_button("Download ZIP File", f, file_name="finance_output.zip")
+    if zip_size <= MAX_SIZE:
+        # Single ZIP
+        with open(zip_path, "rb") as f:
+            st.download_button("Download ZIP File", f, file_name="finance_output.zip")
+    else:
+        # Split into multiple parts
+        st.info(f"The total ZIP size is {zip_size / (1024*1024):.2f} MB. Splitting into multiple parts...")
+        part_num = 1
+        with open(zip_path, "rb") as f:
+            while True:
+                chunk = f.read(MAX_SIZE)
+                if not chunk:
+                    break
+                part_path = os.path.join(temp_dir, f"finance_output_part{part_num}.zip")
+                with open(part_path, "wb") as pf:
+                    pf.write(chunk)
+                with open(part_path, "rb") as pf:
+                    st.download_button(f"Download ZIP Part {part_num}", pf, file_name=f"finance_output_part{part_num}.zip")
+                part_num += 1

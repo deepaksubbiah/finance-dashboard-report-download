@@ -10,31 +10,24 @@ from datetime import datetime
 # Download file from URL
 # ------------------------------
 def download_file(url, folder, file_name):
-    """Downloads a file from a URL into a folder, returns True if successful."""
-    if pd.isna(url) or url.strip() == "":
-        st.info(f"Skipped {file_name} (empty URL)")
-        return False
     try:
-        response = requests.get(url, stream=True, timeout=10)
+        response = requests.get(url, stream=True)
         if response.status_code == 200:
-            file_path = os.path.join(folder, file_name)
-            with open(file_path, "wb") as f:
+            with open(os.path.join(folder, file_name), "wb") as f:
                 for chunk in response.iter_content(1024):
                     f.write(chunk)
-            st.success(f"Downloaded: {file_name}")
-            return True
         else:
-            st.warning(f"Failed to download {file_name} - Status {response.status_code}")
-            return False
+            print(f"Failed to download: {url}")
     except Exception as e:
-        st.warning(f"Error downloading {file_name}: {e}")
-        return False
+        print(f"Error downloading {url}: {e}")
 
 # ------------------------------
 # STREAMLIT UI
 # ------------------------------
 st.set_page_config(page_title="Finance File Downloader", page_icon="📁")
+
 st.title("📁 Finance File Downloader Dashboard (CSV → Files → ZIP)")
+
 st.write("""
 Upload a CSV file containing columns like:
 - RESTAURANT_ID  
@@ -45,10 +38,11 @@ Upload a CSV file containing columns like:
 
 The system will:
 1. Download all URLs  
-2. Arrange into folders by Restaurant ID & Year  
-3. Create a ZIP file (splits into parts if >23 MB)  
+2. Arrange into folders  
+3. Create a ZIP file  
 4. Allow you to download it  
 """)
+
 
 uploaded_file = st.file_uploader("Upload the CSV file", type=["csv"])
 
@@ -69,6 +63,7 @@ if st.button("Start Processing"):
             st.stop()
 
     temp_dir = tempfile.mkdtemp()
+
     progress = st.progress(0)
     total = len(df)
 
@@ -91,47 +86,27 @@ if st.button("Start Processing"):
 
         date_str = dt.strftime("%Y_%m_%d")
 
-        download_file(invoice_url, inv_folder, f"Invoice_{date_str}.pdf")
-        download_file(pa_url, pa_folder, f"Payment_Advice_{date_str}.pdf")
-        download_file(ann_url, ann_folder, f"Annexure_{date_str}.xlsx")
+        if pd.notna(invoice_url):
+            download_file(invoice_url, inv_folder, f"Invoice_{date_str}.pdf")
+
+        if pd.notna(pa_url):
+            download_file(pa_url, pa_folder, f"Payment_Advice_{date_str}.pdf")
+
+        if pd.notna(ann_url):
+            download_file(ann_url, ann_folder, f"Annexure_{date_str}.xlsx")
 
         progress.progress((idx + 1) / total)
-
-    # ------------------------------
-    # Create ZIP and split if >23 MB
-    # ------------------------------
-    MAX_SIZE_MB = 23
-    MAX_SIZE = MAX_SIZE_MB * 1024 * 1024  # bytes
 
     zip_path = os.path.join(temp_dir, "output.zip")
     with zipfile.ZipFile(zip_path, "w") as zipf:
         for root, dirs, files in os.walk(temp_dir):
             for file in files:
-                file_path = os.path.join(root, file)
-                if os.path.isfile(file_path) and os.path.getsize(file_path) > 0:
-                    zipf.write(file_path, arcname=os.path.relpath(file_path, temp_dir))
+                zipf.write(
+                    os.path.join(root, file),
+                    arcname=os.path.relpath(os.path.join(root, file), temp_dir)
+                )
 
-    zip_size = os.path.getsize(zip_path)
     st.success("Processing Completed!")
 
-    if zip_size == 0:
-        st.error("No files were downloaded. Please check your CSV URLs.")
-    elif zip_size <= MAX_SIZE:
-        # Single ZIP
-        with open(zip_path, "rb") as f:
-            st.download_button("Download ZIP File", f, file_name="finance_output.zip")
-    else:
-        # Split into multiple parts
-        st.info(f"The total ZIP size is {zip_size / (1024*1024):.2f} MB. Splitting into multiple parts...")
-        part_num = 1
-        with open(zip_path, "rb") as f:
-            while True:
-                chunk = f.read(MAX_SIZE)
-                if not chunk:
-                    break
-                part_path = os.path.join(temp_dir, f"finance_output_part{part_num}.zip")
-                with open(part_path, "wb") as pf:
-                    pf.write(chunk)
-                with open(part_path, "rb") as pf:
-                    st.download_button(f"Download ZIP Part {part_num}", pf, file_name=f"finance_output_part{part_num}.zip")
-                part_num += 1
+    with open(zip_path, "rb") as f:
+        st.download_button("Download ZIP File", f, file_name="finance_output.zip")

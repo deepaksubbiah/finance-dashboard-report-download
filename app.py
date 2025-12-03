@@ -7,42 +7,22 @@ import tempfile
 from datetime import datetime
 
 # ------------------------------
-# Access secrets
+# Download file from URL
 # ------------------------------
-EMAIL = st.secrets["finance"]["email"]
-PASSWORD = st.secrets["finance"]["password"]
-
-# ------------------------------
-# Download file with authentication
-# ------------------------------
-def download_file_authenticated(url, folder, file_name):
+def download_file(url, folder, file_name):
     try:
-        with requests.Session() as session:
-            # Replace with your internal login endpoint if required
-            login_url = "https://internal.swiggy.in/login"  
-            payload = {"email": EMAIL, "password": PASSWORD}
-
-            login_resp = session.post(login_url, data=payload)
-            if login_resp.status_code != 200:
-                st.error(f"Login failed with status: {login_resp.status_code}")
-                return False
-
-            response = session.get(url, stream=True)
-            if response.status_code == 200:
-                with open(os.path.join(folder, file_name), "wb") as f:
-                    for chunk in response.iter_content(1024):
-                        f.write(chunk)
-                return True
-            else:
-                st.warning(f"Failed to download {file_name} - Status {response.status_code}")
-                return False
-
+        response = requests.get(url, stream=True)
+        if response.status_code == 200:
+            with open(os.path.join(folder, file_name), "wb") as f:
+                for chunk in response.iter_content(1024):
+                    f.write(chunk)
+        else:
+            print(f"Failed to download: {url}")
     except Exception as e:
-        st.error(f"Error downloading {file_name}: {e}")
-        return False
+        print(f"Error downloading {url}: {e}")
 
 # ------------------------------
-# Streamlit UI
+# STREAMLIT UI
 # ------------------------------
 st.set_page_config(page_title="Finance File Downloader", page_icon="📁")
 
@@ -57,10 +37,10 @@ Upload a CSV file containing columns like:
 - DT  
 
 The system will:
-1. Download all URLs (requires internal access)
-2. Arrange into folders
-3. Create a ZIP file (splits into parts if >23 MB)
-4. Allow you to download it
+1. Download all URLs  
+2. Arrange into folders  
+3. Create a ZIP file (splits into parts if >23 MB)  
+4. Allow you to download it  
 """)
 
 uploaded_file = st.file_uploader("Upload the CSV file", type=["csv"])
@@ -85,10 +65,8 @@ if st.button("Start Processing"):
     progress = st.progress(0)
     total = len(df)
 
-    # ------------------------------
-    # Process each row
-    # ------------------------------
     for idx, row in df.iterrows():
+
         rid = str(row["restaurant_id"])
         invoice_url = row["invoice_url"]
         pa_url = row["payment_advice_url"]
@@ -107,16 +85,18 @@ if st.button("Start Processing"):
         date_str = dt.strftime("%Y_%m_%d")
 
         if pd.notna(invoice_url):
-            download_file_authenticated(invoice_url, inv_folder, f"Invoice_{date_str}.pdf")
+            download_file(invoice_url, inv_folder, f"Invoice_{date_str}.pdf")
+
         if pd.notna(pa_url):
-            download_file_authenticated(pa_url, pa_folder, f"Payment_Advice_{date_str}.pdf")
+            download_file(pa_url, pa_folder, f"Payment_Advice_{date_str}.pdf")
+
         if pd.notna(ann_url):
-            download_file_authenticated(ann_url, ann_folder, f"Annexure_{date_str}.xlsx")
+            download_file(ann_url, ann_folder, f"Annexure_{date_str}.xlsx")
 
         progress.progress((idx + 1) / total)
 
     # ------------------------------
-    # Create ZIP and split if >23 MB
+    # Create ZIP (split if >23 MB)
     # ------------------------------
     MAX_SIZE_MB = 23
     MAX_SIZE = MAX_SIZE_MB * 1024 * 1024  # bytes
